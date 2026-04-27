@@ -1,0 +1,12 @@
+# 클로드의 토큰 낭비를 방지하기 위한 제외 목록
+storage/chart_images/
+datasets/
+data/csv/
+__pycache__/
+.venv/
+*.csv
+*.png
+*.jpg
+*.jpeg
+*.log
+.git/

@@ -1,0 +1,85 @@
+# Telegram Configuration
+# 실제 사용 시 telegram_config.yaml로 복사하고 값을 입력하세요
+
+telegram:
+  enabled: false
+  
+  # 봇 토큰
+  bot_token: "YOUR_BOT_TOKEN_HERE"
+  
+  # 채팅방 ID
+  chat_id: "YOUR_CHAT_ID_HERE"
+  
+  # 메시지 전송 지연 (초)
+  message_delay_seconds: 1
+  
+  # 재시도 설정
+  retry_count: 3
+  retry_delay_seconds: 5
+
+# 권한 설정
+permissions:
+  # 관리자 user_id (텔레그램에서 /start 후 로그에서 확인)
+  admins:
+    - "YOUR_USER_ID_1"
+    - "YOUR_USER_ID_2"
+  
+  # 일반 사용자 user_id
+  users:
+    - "YOUR_USER_ID_3"
+
+# 명령어 활성화
+commands:
+  enabled_commands:
+    help: true
+    status: true
+    account: true
+    positions: true
+    orders: true
+    pause_buy: true
+    resume_buy: true
+    pause_all: true
+    resume_all: true
+    restart: true
+    buy: true
+    sell: true
+    sell_all: true
+    cancel: true
+    emergency: true
+
+# 알림 설정
+notifications:
+  # 매수/매도 완료 시 알림
+  on_trade_filled: true
+  
+  # 주문 거부 시 알림
+  on_order_rejected: true
+  
+  # 에러 발생 시 알림
+  on_error: true
+  
+  # 긴급 상황 시 알림
+  on_emergency: true
+  
+  # 일일 리포트
+  daily_report:
+    enabled: true
+    time: "16:00"  # 장마감 후
+
+# 메시지 템플릿
+message_templates:
+  welcome: |
+    안녕하세요! Gichan Abba System입니다.
+    /help 를 입력하면 사용 가능한 명령어를 볼 수 있습니다.
+  
+  error: |
+    오류가 발생했습니다:
+    {error_message}
+  
+  trade_filled: |
+    📊 매매 체결
+    종목: {symbol}
+    방향: {side}
+    수량: {quantity}주
+    가격: {price:,}원
+    시간: {time}

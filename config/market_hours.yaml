@@ -1,0 +1,67 @@
+# Market Hours Configuration
+
+# KIS 모의투자 / KRX 정규장
+kis_market:
+  timezone: "Asia/Seoul"
+  session_name: "KRX Regular"
+  pre_market:
+    enabled: false
+  main_market:
+    start: "09:00"  # 09:00
+    end: "15:30"    # 15:30
+  after_market:
+    enabled: false
+
+# NXT 거래소 (추후 지원)
+nxt_market:
+  timezone: "Asia/Seoul"
+  session_name: "NXT"
+  pre_market:
+    enabled: true
+    start: "08:00"
+    end: "08:50"
+  main_market:
+    start: "09:30"  # 09:30
+    end: "15:20"    # 15:20
+  after_market:
+    enabled: true
+    start: "15:40"  # 15:40
+    end: "20:00"    # 20:00
+
+# 신규 매수 제한 시간
+buy_restricted_times:
+  - start: "08:50"
+    end: "09:30"
+    reason: "프리마켓 및 오프닝 제한"
+  - start: "15:20"
+    end: "15:40"
+    reason: "클로징 및 전환 제한"
+
+# 주중/주말 설정
+trading_days:
+  monday: true
+  tuesday: true
+  wednesday: true
+  thursday: true
+  friday: true
+  saturday: false
+  sunday: false
+
+# 공휴일 (YYYY-MM-DD)
+holidays:
+  - "2024-01-01"  # 신정
+  - "2024-02-10"  # 설날
+  - "2024-02-12"
+  - "2024-02-13"
+  - "2024-03-01"  # 3.1절
+  - "2024-04-10"  # 국회의원 선거
+  - "2024-05-05"  # 어린이날
+  - "2024-05-15"  # 부처님 오신날
+  - "2024-06-06"  # 현충일
+  - "2024-08-15"  # 광복절
+  - "2024-09-16"  # 추석
+  - "2024-09-17"
+  - "2024-09-18"
+  - "2024-10-03"  # 개천절
+  - "2024-10-09"  # 한글날
+  - "2024-12-25"  # 크리스마스

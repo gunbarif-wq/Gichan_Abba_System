@@ -1,0 +1,29 @@
+# Paper Mode Configuration
+# 실제 API 호출 없이 가상 계좌로 테스트
+
+mode: paper
+live_trading: false
+
+# 초기 자본금
+initial_cash: 10000000  # 1천만원
+
+# 수수료
+commission_rate: 0.00015  # 0.015%
+
+# 거래세
+tax_rate: 0.0018  # 0.18%
+
+# 피라미딩 (같은 종목 중복 매수)
+pyramiding_enabled: false
+
+# 거래 시간 체크 (paper는 시간 제한 없음)
+time_check_enabled: false
+
+# 주문 체결 지연
+fill_delay_ms: 0
+
+# 슬리피지 (가격 변동)
+slippage_bps: 0  # basis points
+
+# 최대 일일 손실률
+max_daily_loss_ratio: 0.03

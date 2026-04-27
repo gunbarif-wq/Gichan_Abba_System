@@ -1,0 +1,39 @@
+# Risk Management Rules
+# Risk Guard에서 사용하는 리스크 설정
+
+# 종목당 최대 비중 (전체 자산 대비)
+max_position_ratio_per_stock: 0.20  # 20%
+
+# 최소 현금 비율 (전체 자산 대비)
+min_cash_ratio: 0.20  # 20%
+
+# 최대 보유 종목 수
+max_positions: 5
+
+# 최대 일일 손실률
+max_daily_loss_ratio: 0.03  # 3%
+
+# 실계좌 거래 활성화 여부
+allow_live_trading: false
+
+# 신규 매수 허용 여부
+new_buy_allowed: true
+
+# 긴급 중단 여부
+emergency_stop: false
+
+# 블랙리스트 활성화
+blacklist_enabled: true
+
+# 회로차단기 (연속 손실 시 거래 중단)
+circuit_breaker:
+  enabled: true
+  consecutive_losses: 3  # 연속 3회 손실
+  loss_ratio_threshold: 0.10  # 10% 손실 시
+  duration_minutes: 60  # 60분 거래 중단
+
+# 추가 보안 체크
+verify_account_before_trade: true
+verify_position_before_sell: true
+require_manual_approval_for_large_orders: true
+large_order_threshold: 50000000  # 5천만원 이상

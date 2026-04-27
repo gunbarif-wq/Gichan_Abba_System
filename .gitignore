@@ -1,0 +1,43 @@
+# 이미지 데이터 (용량 너무 큼)
+storage/chart_images/
+
+# 원본 주가 CSV
+data/csv/
+
+# 학습된 모델 가중치
+models/weights/
+models/active/
+
+# 학습 로그
+models/train_log.txt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# 환경설정 (API 키 등 민감 정보)
+.env
+config/live_config.yaml
+config/mock_config.yaml
+
+# 로그
+storage/logs/
+*.log
+
+# Claude Code 개인 설정
+.claude/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

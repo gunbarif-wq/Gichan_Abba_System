@@ -1,0 +1,42 @@
+# Agent Weights
+# Council에서 각 에이전트의 점수를 종합할 때 사용하는 가중치
+
+# 에이전트별 가중치
+agent_weights:
+  vision_agent: 0.30      # 30%
+  supply_agent: 0.25      # 25%
+  news_agent: 0.20        # 20%
+  critic_agent: 0.25      # 25%
+
+# 임계값
+thresholds:
+  buy_recommendation: 70.0     # 매수 추천 점수
+  strong_buy: 80.0             # 강한 매수
+  weak_signal: 50.0            # 약한 신호
+  critic_penalty: -10.0        # 비평가 감점
+
+# 점수 범위
+score_ranges:
+  excellent: 80.0   # 80점 이상
+  good: 70.0        # 70~79점
+  fair: 60.0        # 60~69점
+  weak: 50.0        # 50~59점
+  poor: 40.0        # 40~49점
+
+# 신뢰도 수준
+confidence_levels:
+  high: 0.8         # 80% 이상
+  medium: 0.6       # 60~79%
+  low: 0.4          # 40~59%
+  very_low: 0.2     # 20~39%
+
+# 에이전트 활성화
+enabled_agents:
+  vision_agent: true
+  supply_agent: true
+  news_agent: true
+  critic_agent: true
+  council: true
+  evolution_coach: false  # 추후 활성화
+  ops_agent: true
+  command_agent: true
