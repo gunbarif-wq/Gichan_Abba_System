@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 class ManualTradeHandler:
     """
-    수동 매매 처리기 (테스트 가능한 Skeleton)
+    수동 매매 처리기
 
     지원:
     /buy SYMBOL qty QTY

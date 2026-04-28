@@ -25,6 +25,14 @@ from account.account_manager import get_account_manager
 from trade.order_manager import get_order_manager
 from trade.position_manager import get_position_manager
 
+# 순환 임포트 방지: get_shared_state는 run.py에서 주입하거나 지연 임포트
+def _get_shared_state():
+    try:
+        from run import get_shared_state
+        return get_shared_state()
+    except Exception:
+        return None
+
 logger = logging.getLogger(__name__)
 
 
@@ -95,12 +103,15 @@ class RiskManager:
         )
         
         checks = {}
-        
+
         try:
-            # 1. 실계좌 거래 여부 확인
+            # 1. 긴급 중단 — SharedState 실시간 참조, 최우선 처리
+            self._check_emergency_stop_realtime()
+
+            # 2. 실계좌 거래 여부 확인
             checks['live_trading'] = self._check_live_trading(mode)
-            
-            # 2. 긴급 중단 확인
+
+            # 3. 긴급 중단 확인 (legacy rules 기반 — SharedState 없는 환경 대비)
             checks['emergency_stop'] = self._check_emergency_stop()
             
             # 3. UNKNOWN 상태 확인
@@ -164,10 +175,17 @@ class RiskManager:
             return False
         return True
     
+    def _check_emergency_stop_realtime(self) -> None:
+        """SharedState.emergency_stop 실시간 참조 — True이면 즉시 예외"""
+        state = _get_shared_state()
+        if state is not None and state.emergency_stop:
+            logger.warning("[RiskManager] Emergency Stop ACTIVE — 모든 주문 차단")
+            raise EmergencyStop("Emergency Stop ACTIVE")
+
     def _check_emergency_stop(self) -> bool:
-        """긴급 중단 여부"""
+        """rules 기반 긴급 중단 (SharedState 없는 환경 대비)"""
         if self.rules.get('emergency_stop', False):
-            logger.warning("[RiskManager] 긴급 중단 상태")
+            logger.warning("[RiskManager] Emergency Stop ACTIVE (rules)")
             return False
         return True
     
@@ -316,10 +334,13 @@ class RiskManager:
         logger.info(f"[RiskManager] 거부 기록: {len(self.rejections)}건")
     
     def set_emergency_stop(self, enabled: bool) -> None:
-        """긴급 중단 설정"""
+        """긴급 중단 설정 — rules + SharedState 동시 반영"""
         self.rules['emergency_stop'] = enabled
+        shared = _get_shared_state()
+        if shared is not None:
+            shared.emergency_stop = enabled
         state = "활성화" if enabled else "해제"
-        logger.warning(f"[RiskManager] 긴급 중단 {state}")
+        logger.warning(f"[RiskManager] Emergency Stop {state}")
     
     def set_new_buy_allowed(self, allowed: bool) -> None:
         """신규 매수 허용 설정"""

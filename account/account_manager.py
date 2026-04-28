@@ -197,18 +197,15 @@ class AccountManager:
         
         return position
     
-    def remove_position(self, symbol: str, quantity: int) -> Optional[Position]:
-        """
-        포지션 감소 (매도 반영)
-        
-        Args:
-            symbol: 종목 코드
-            quantity: 매도 수량
-        
-        Returns:
-            업데이트된 포지션 또는 None
-        """
-        position = self.position_manager.add_sell_fill(symbol, quantity)
+    def remove_position(self, symbol: str, quantity: int,
+                        sell_price: float = 0.0,
+                        commission: float = 0.0,
+                        tax: float = 0.0) -> Optional[Position]:
+        """포지션 감소 + 실현 손익 기록"""
+        position = self.position_manager.add_sell_fill(
+            symbol, quantity,
+            sell_price=sell_price, commission=commission, tax=tax,
+        )
         
         if position:
             logger.debug(

@@ -22,6 +22,7 @@ class PositionManager:
     def __init__(self):
         """포지션 관리자 초기화"""
         self.positions: Dict[str, Position] = {}
+        self._realized_pnl: Dict[str, float] = {}  # symbol → 누적 실현 손익
         logger.info("[PositionManager] 초기화 완료")
     
     def add_buy_fill(self, symbol: str, name: str, quantity: int, price: float, 
@@ -73,47 +74,43 @@ class PositionManager:
         
         return position
     
-    def add_sell_fill(self, symbol: str, quantity: int) -> Optional[Position]:
+    def add_sell_fill(self, symbol: str, quantity: int,
+                     sell_price: float = 0.0,
+                     commission: float = 0.0,
+                     tax: float = 0.0) -> Optional[Position]:
         """
-        매도 체결 반영
-        
-        Args:
-            symbol: 종목 코드
-            quantity: 매도 수량
-        
-        Returns:
-            업데이트된 포지션 또는 None
+        매도 체결 반영 + 실현 손익 기록
+        sell_price: 체결 가격 (0이면 손익 계산 생략)
         """
         if symbol not in self.positions:
             logger.warning(f"[PositionManager] {symbol} 포지션 없음")
             return None
-        
+
         position = self.positions[symbol]
-        
+
         if position.quantity < quantity:
             logger.warning(
                 f"[PositionManager] {symbol} 매도 수량 초과: "
                 f"보유={position.quantity} 매도={quantity}"
             )
             return None
-        
-        logger.info(
-            f"[PositionManager] 매도 반영: {symbol} {quantity}주"
-        )
-        
+
+        # 실현 손익 계산 (매도 단가 - 평균 매입가) * 수량 - 비용
+        if sell_price > 0:
+            realized = (sell_price - position.avg_buy_price) * quantity - commission - tax
+            self._realized_pnl[symbol] = self._realized_pnl.get(symbol, 0.0) + realized
+            logger.info(
+                f"[PositionManager] {symbol} 매도 실현 손익: "
+                f"{realized:+,.0f}원 (누적 {self._realized_pnl[symbol]:+,.0f}원)"
+            )
+
         position.quantity -= quantity
         position.last_update = datetime.now()
-        
-        # 포지션이 0이 되면 제거
+
         if position.quantity == 0:
             del self.positions[symbol]
             logger.info(f"[PositionManager] {symbol} 포지션 제거 (수량=0)")
-        else:
-            logger.debug(
-                f"[PositionManager] {symbol} 포지션 업데이트: "
-                f"남은 수량={position.quantity}"
-            )
-        
+
         return position
     
     def update_position_price(self, symbol: str, current_price: float) -> Optional[Position]:

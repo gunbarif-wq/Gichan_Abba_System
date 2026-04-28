@@ -20,7 +20,7 @@ class SignalEngine:
     - 신호 필터링
     - 신호 우선순위 결정
     
-    TODO: 실제 신호 필터링 로직 구현
+    가격/수량/신뢰도 기본 검증 + confidence 내림차순 정렬
     """
     
     def __init__(self):
@@ -28,18 +28,16 @@ class SignalEngine:
         logger.info("[SignalEngine] 초기화 완료")
     
     def validate_signal(self, signal: Signal) -> bool:
-        """
-        신호 검증
-        
-        Args:
-            signal: 거래 신호
-        
-        Returns:
-            유효한 신호 여부
-        """
-        logger.debug(f"[SignalEngine] 신호 검증: {signal.symbol} {signal.side.value}")
-        
-        # Paper 모드: 모든 신호 수락
+        """가격/수량 기본 유효성 검사"""
+        if signal.price <= 0:
+            logger.debug(f"[SignalEngine] 무효 신호 (가격=0): {signal.symbol}")
+            return False
+        if signal.quantity <= 0:
+            logger.debug(f"[SignalEngine] 무효 신호 (수량=0): {signal.symbol}")
+            return False
+        if signal.confidence < 0.1:
+            logger.debug(f"[SignalEngine] 신뢰도 낮음({signal.confidence:.2f}): {signal.symbol}")
+            return False
         return True
     
     def filter_signals(self, signals: List[Signal]) -> List[Signal]:
@@ -66,8 +64,11 @@ class SignalEngine:
         Returns:
             우선순위 정렬된 신호
         """
-        # TODO: 신뢰도 기반 우선순위 결정
-        sorted_signals = sorted(signals, key=lambda s: s.confidence, reverse=True)
+        # confidence 내림차순 → 같으면 timestamp 오름차순 (빠른 신호 우선)
+        sorted_signals = sorted(
+            signals,
+            key=lambda s: (-s.confidence, s.timestamp),
+        )
         return sorted_signals
 
 

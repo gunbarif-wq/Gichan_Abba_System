@@ -18,13 +18,13 @@ Pillow>=10.0.0
 # API & Web
 requests>=2.31.0
 aiohttp>=3.9.0
+websocket-client>=1.6.0
 
 # Telegram Bot
 python-telegram-bot>=20.0
 
 # Database
 sqlalchemy>=2.0.0
-sqlite3
 
 # Logging & Monitoring
 python-dotenv>=1.0.0

@@ -1,5 +1,6 @@
 # 이미지 데이터 (용량 너무 큼)
 storage/chart_images/
+storage/img_cache/
 
 # 원본 주가 CSV
 data/csv/

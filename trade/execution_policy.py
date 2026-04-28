@@ -13,13 +13,11 @@ logger = logging.getLogger(__name__)
 
 class ExecutionPolicy:
     """
-    주문 실행 정책 (Skeleton)
+    주문 실행 정책
 
-    Paper 모드:
-    - 지정가 → 즉시 체결
-    - 시장가 → 즉시 체결
-
-    TODO: 실제 주문 집행 정책 구현
+    슬리피지 적용, 주문 타입 결정, 금액 기준 수량 계산
+    Paper 모드: slippage_rate=0 (즉시 체결)
+    Mock/Live: slippage_rate=0.0005 (0.05%) 권장
     """
 
     def __init__(self, slippage_rate: float = 0.0):
