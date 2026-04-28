@@ -37,8 +37,8 @@ logger = logging.getLogger(__name__)
 DATA_DIR    = BASE_DIR / "storage" / "chart_images" / "after_analysis"
 CSV_PATH    = BASE_DIR / "storage" / "chart_images" / "labels_after_analysis.csv"
 WEIGHT_PATH = BASE_DIR / "models" / "weights" / "resnet18_pretrained.pt"
-SAVE_S1     = BASE_DIR / "models" / "active" / "stage1_surge_detector.pt"
-SAVE_S2     = BASE_DIR / "models" / "active" / "stage2_authenticity_classifier.pt"
+SAVE_S1     = BASE_DIR / "models" / "candidates" / "stage1_surge_detector.pt"
+SAVE_S2     = BASE_DIR / "models" / "candidates" / "stage2_authenticity_classifier.pt"
 METRICS_PATH = BASE_DIR / "storage" / "logs" / "nightly_metrics.json"
 
 # ── 하이퍼파라미터 ─────────────────────────────────────────────────────────────
@@ -410,6 +410,12 @@ def run_nightly_cycle():
             "s2_recall_cls0":    s2_result["recall"][0],
         }
         save_metrics(new_metrics)
+        try:
+            from training.model_registry import register_candidate
+            register_candidate(str(SAVE_S1), metrics=new_metrics, role="stage1_surge_detector")
+            register_candidate(str(SAVE_S2), metrics=new_metrics, role="stage2_authenticity_classifier")
+        except Exception as e:
+            logger.warning(f"[NightlyTrainer] registry 등록 실패: {e}")
 
         duration = time.time() - started
         send_report(ohlcv_result, s1_result, s2_result, prev, duration, success=True)

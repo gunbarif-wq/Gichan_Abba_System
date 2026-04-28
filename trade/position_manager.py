@@ -4,6 +4,7 @@ Position Manager
 """
 
 import logging
+import threading
 from datetime import datetime
 from typing import Optional, Dict, List
 
@@ -22,6 +23,7 @@ class PositionManager:
     def __init__(self):
         """포지션 관리자 초기화"""
         self.positions: Dict[str, Position] = {}
+        self._lock = threading.RLock()
         self._realized_pnl: Dict[str, float] = {}  # symbol → 누적 실현 손익
         logger.info("[PositionManager] 초기화 완료")
     
@@ -105,6 +107,7 @@ class PositionManager:
             )
 
         position.quantity -= quantity
+        position.total_buy_amount = position.avg_buy_price * position.quantity
         position.last_update = datetime.now()
 
         if position.quantity == 0:
@@ -150,7 +153,8 @@ class PositionManager:
         Returns:
             포지션 객체 또는 None
         """
-        return self.positions.get(symbol)
+        with self._lock:
+            return self.positions.get(symbol)
     
     def get_all_positions(self) -> Dict[str, Position]:
         """
@@ -159,7 +163,8 @@ class PositionManager:
         Returns:
             포지션 딕셔너리
         """
-        return self.positions.copy()
+        with self._lock:
+            return self.positions.copy()
     
     def get_total_position_amount(self) -> float:
         """
@@ -168,7 +173,8 @@ class PositionManager:
         Returns:
             총 매입 금액
         """
-        return sum(pos.total_buy_amount for pos in self.positions.values())
+        with self._lock:
+            return sum(pos.total_buy_amount for pos in self.positions.values())
     
     def get_total_unrealized_pnl(self) -> float:
         """
@@ -177,11 +183,13 @@ class PositionManager:
         Returns:
             총 미실현 손익
         """
-        return sum(pos.unrealized_pnl for pos in self.positions.values())
+        with self._lock:
+            return sum(pos.unrealized_pnl for pos in self.positions.values())
     
     def clear_all_positions(self) -> None:
         """모든 포지션 삭제"""
-        self.positions.clear()
+        with self._lock:
+            self.positions.clear()
         logger.info("[PositionManager] 모든 포지션 삭제")
     
     def has_position(self, symbol: str) -> bool:
@@ -194,7 +202,8 @@ class PositionManager:
         Returns:
             보유 여부
         """
-        return symbol in self.positions and self.positions[symbol].quantity > 0
+        with self._lock:
+            return symbol in self.positions and self.positions[symbol].quantity > 0
     
     def get_position_quantity(self, symbol: str) -> int:
         """
@@ -206,9 +215,10 @@ class PositionManager:
         Returns:
             보유 수량 (없으면 0)
         """
-        if symbol not in self.positions:
-            return 0
-        return self.positions[symbol].quantity
+        with self._lock:
+            if symbol not in self.positions:
+                return 0
+            return self.positions[symbol].quantity
 
 
 # 전역 포지션 관리자 인스턴스

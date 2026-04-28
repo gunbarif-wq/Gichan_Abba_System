@@ -4,6 +4,7 @@ Account Manager
 """
 
 import logging
+import threading
 from datetime import datetime
 from typing import Optional
 
@@ -34,6 +35,7 @@ class AccountManager:
         self.total_cash = initial_cash
         self.available_cash = initial_cash
         self.position_manager = get_position_manager()
+        self._lock = threading.RLock()
         logger.info(
             f"[AccountManager] 초기화: {mode.value} 모드, "
             f"초기 현금 {initial_cash:,}원"
@@ -50,7 +52,7 @@ class AccountManager:
         position_amount = self.position_manager.get_total_position_amount()
         
         # 총 자산 = 현금 + 포지션 가치
-        total_asset = self.total_cash + position_amount
+        total_asset = self.available_cash + position_amount
         
         account = Account(
             mode=self.mode,
@@ -81,10 +83,13 @@ class AccountManager:
         commission = order_amount * commission_rate
         total_required = order_amount + commission
         
-        if self.available_cash < total_required:
+        with self._lock:
+            available_cash = self.available_cash
+
+        if available_cash < total_required:
             logger.warning(
                 f"[AccountManager] {symbol} 매수 불가: "
-                f"필요금액={total_required:,} > 가능금액={self.available_cash:,}"
+                f"필요금액={total_required:,} > 가능금액={available_cash:,}"
             )
             return False
         
@@ -133,16 +138,17 @@ class AccountManager:
         order_amount = quantity * price
         total_deduct = order_amount + commission
         
-        if self.available_cash < total_deduct:
-            raise InsufficientCash(
-                f"현금 부족: 필요={total_deduct:,} 가능={self.available_cash:,}"
-            )
-        
-        self.available_cash -= total_deduct
+        with self._lock:
+            if self.available_cash < total_deduct:
+                raise InsufficientCash(
+                    f"현금 부족: 필요={total_deduct:,} 가능={self.available_cash:,}"
+                )
+            self.available_cash -= total_deduct
+            available_cash = self.available_cash
         
         logger.info(
             f"[AccountManager] {symbol} 매수 현금 차감: {total_deduct:,}원 "
-            f"(남은 현금: {self.available_cash:,}원)"
+            f"(남은 현금: {available_cash:,}원)"
         )
     
     def add_for_sell(self, symbol: str, quantity: int, price: float,
@@ -160,11 +166,13 @@ class AccountManager:
         sell_amount = quantity * price
         net_proceed = sell_amount - commission - tax
         
-        self.available_cash += net_proceed
+        with self._lock:
+            self.available_cash += net_proceed
+            available_cash = self.available_cash
         
         logger.info(
             f"[AccountManager] {symbol} 매도 현금 추가: {net_proceed:,}원 "
-            f"(남은 현금: {self.available_cash:,}원)"
+            f"(남은 현금: {available_cash:,}원)"
         )
     
     def update_position(self, symbol: str, name: str, quantity: int,
@@ -244,7 +252,8 @@ class AccountManager:
             총 자산
         """
         position_amount = self.position_manager.get_total_position_amount()
-        return self.total_cash + position_amount
+        with self._lock:
+            return self.available_cash + position_amount
     
     def get_cash_ratio(self) -> float:
         """
@@ -290,7 +299,8 @@ class AccountManager:
     def clear_all(self) -> None:
         """모든 계좌 정보 초기화"""
         self.position_manager.clear_all_positions()
-        self.available_cash = self.total_cash
+        with self._lock:
+            self.available_cash = self.total_cash
         logger.info("[AccountManager] 모든 계좌 초기화")
 
 

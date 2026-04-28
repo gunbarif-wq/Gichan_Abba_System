@@ -28,8 +28,8 @@ BASE_DIR    = Path(__file__).resolve().parent.parent
 DATA_DIR    = BASE_DIR / "storage" / "chart_images" / "after_analysis"
 CSV_PATH    = BASE_DIR / "storage" / "chart_images" / "labels_after_analysis.csv"
 WEIGHT_PATH = BASE_DIR / "models" / "weights" / "resnet18_pretrained.pt"
-SAVE_S1     = BASE_DIR / "models" / "active" / "stage1_surge_detector.pt"
-SAVE_S2     = BASE_DIR / "models" / "active" / "stage2_authenticity_classifier.pt"
+SAVE_S1     = BASE_DIR / "models" / "candidates" / "stage1_surge_detector.pt"
+SAVE_S2     = BASE_DIR / "models" / "candidates" / "stage2_authenticity_classifier.pt"
 SAVED_S1    = BASE_DIR / "models" / "saved"  / "stage1_surge_detector.pt"
 SAVED_S2    = BASE_DIR / "models" / "saved"  / "stage2_authenticity_classifier.pt"
 

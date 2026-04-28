@@ -175,10 +175,11 @@ class CommandRouter:
             qty    = pending["qty"]
             price  = pending["price"]
 
+            use_sor = bool(pending.get("use_sor", False))
             if pending["type"] == "BUY":
-                result = handler._execute_buy(symbol, "", qty, price)
+                result = handler._execute_buy(symbol, "", qty, price, use_sor=use_sor)
             else:
-                result = handler._execute_sell(symbol, "", qty, price)
+                result = handler._execute_sell(symbol, "", qty, price, use_sor=use_sor)
 
             return result.message
         except Exception as e:

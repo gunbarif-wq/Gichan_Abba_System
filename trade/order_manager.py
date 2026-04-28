@@ -5,12 +5,12 @@ Risk Guard와 Broker 사이의 중계자
 """
 
 import logging
-from datetime import datetime
+import threading
 from typing import Optional
 from uuid import uuid4
 
-from shared.schemas import Order, OrderState, OrderSide, OrderType, Signal
-from shared.errors import OrderException, ExecutionException
+from shared.schemas import Mode, Order, OrderState, OrderSide, OrderType, Signal
+from shared.errors import OrderException
 from trade.paper_broker import get_paper_broker
 
 logger = logging.getLogger(__name__)
@@ -25,17 +25,36 @@ class OrderManager:
     - Risk Guard를 거친 주문만 실행
     """
     
-    def __init__(self):
+    def __init__(self, mode: Mode = Mode.PAPER, broker=None):
         """주문 관리자 초기화"""
-        self.broker = get_paper_broker()
+        self.mode = mode
+        self.broker = broker or self._make_broker(mode)
         self.orders: dict[str, Order] = {}
-        logger.info("[OrderManager] 초기화 완료")
+        self._lock = threading.RLock()
+        logger.info("[OrderManager] 초기화 완료 mode=%s", mode.value)
+
+    @staticmethod
+    def _make_broker(mode: Mode):
+        if mode == Mode.PAPER:
+            return get_paper_broker()
+        from trade.kis_broker import KisBroker
+        return KisBroker(mode)
+
+    def configure(self, mode: Mode, broker=None) -> None:
+        """Switch broker mode during application bootstrap."""
+        with self._lock:
+            self.mode = mode
+            self.broker = broker or self._make_broker(mode)
+        logger.info("[OrderManager] broker configured mode=%s", mode.value)
     
     def create_order(
         self,
         signal: Signal,
         price: float,
         quantity: int,
+        order_type: OrderType = OrderType.LIMIT,
+        use_sor: bool = False,
+        metadata: Optional[dict] = None,
     ) -> Order:
         """
         주문 생성 및 실행
@@ -57,27 +76,26 @@ class OrderManager:
                 f"{signal.side.value} {quantity}주 @ {price:,}원"
             )
             
-            # 주문 객체 생성
             order = Order(
                 order_id=str(uuid4()),
                 symbol=signal.symbol,
                 name=signal.name,
                 side=signal.side,
-                order_type=OrderType.LIMIT,
+                order_type=order_type,
                 quantity=quantity,
                 price=price,
                 amount=quantity * price,
                 reason=signal.reason,
+                metadata={**(metadata or {}), "use_sor": use_sor},
             )
-            
-            # 주문 저장
-            self.orders[order.order_id] = order
-            
-            # Broker에 주문 전달
+
+            with self._lock:
+                self.orders[order.order_id] = order
+
             executed_order = self.broker.place_order(order)
-            
-            # 주문 업데이트
-            self.orders[executed_order.order_id] = executed_order
+
+            with self._lock:
+                self.orders[executed_order.order_id] = executed_order
             
             logger.info(
                 f"[OrderManager] 주문 완료: {executed_order.order_id} "
@@ -85,7 +103,7 @@ class OrderManager:
             )
             
             return executed_order
-            
+
         except Exception as e:
             logger.error(f"[OrderManager] 주문 생성 실패: {str(e)}")
             raise OrderException(f"주문 생성 실패: {str(e)}")
@@ -100,11 +118,12 @@ class OrderManager:
         Returns:
             취소 성공 여부
         """
-        if order_id not in self.orders:
+        with self._lock:
+            order = self.orders.get(order_id)
+
+        if order is None:
             logger.warning(f"[OrderManager] 주문을 찾을 수 없음: {order_id}")
             return False
-        
-        order = self.orders[order_id]
         
         try:
             logger.info(f"[OrderManager] 주문 취소 요청: {order_id}")
@@ -132,7 +151,8 @@ class OrderManager:
         Returns:
             주문 객체 또는 None
         """
-        return self.orders.get(order_id)
+        with self._lock:
+            return self.orders.get(order_id)
     
     def get_orders_by_symbol(self, symbol: str) -> list[Order]:
         """
@@ -144,7 +164,8 @@ class OrderManager:
         Returns:
             주문 목록
         """
-        return [order for order in self.orders.values() if order.symbol == symbol]
+        with self._lock:
+            return [order for order in self.orders.values() if order.symbol == symbol]
     
     def get_pending_orders(self, symbol: Optional[str] = None) -> list[Order]:
         """
@@ -163,12 +184,14 @@ class OrderManager:
             OrderState.SELL_PENDING,
             OrderState.SELL_SENT,
             OrderState.SELL_PARTIAL,
+            OrderState.UNKNOWN,
         ]
         
-        orders = [
-            order for order in self.orders.values()
-            if order.state in pending_states
-        ]
+        with self._lock:
+            orders = [
+                order for order in self.orders.values()
+                if order.state in pending_states
+            ]
         
         if symbol:
             orders = [order for order in orders if order.symbol == symbol]
@@ -191,9 +214,10 @@ class OrderManager:
             OrderState.BUY_PARTIAL,
         ]
         
-        for order in self.orders.values():
-            if order.symbol == symbol and order.side == OrderSide.BUY and order.state in buy_states:
-                return True
+        with self._lock:
+            for order in self.orders.values():
+                if order.symbol == symbol and order.side == OrderSide.BUY and order.state in buy_states:
+                    return True
         
         return False
     
@@ -213,9 +237,10 @@ class OrderManager:
             OrderState.SELL_PARTIAL,
         ]
         
-        for order in self.orders.values():
-            if order.symbol == symbol and order.side == OrderSide.SELL and order.state in sell_states:
-                return True
+        with self._lock:
+            for order in self.orders.values():
+                if order.symbol == symbol and order.side == OrderSide.SELL and order.state in sell_states:
+                    return True
         
         return False
     
@@ -226,16 +251,19 @@ class OrderManager:
         Returns:
             주문 딕셔너리
         """
-        return self.orders.copy()
+        with self._lock:
+            return self.orders.copy()
 
 
 # 전역 주문 관리자 인스턴스
 _order_manager: Optional[OrderManager] = None
 
 
-def get_order_manager() -> OrderManager:
+def get_order_manager(mode: Optional[Mode] = None, broker=None) -> OrderManager:
     """주문 관리자 싱글톤 반환"""
     global _order_manager
     if _order_manager is None:
-        _order_manager = OrderManager()
+        _order_manager = OrderManager(mode or Mode.PAPER, broker)
+    elif mode is not None or broker is not None:
+        _order_manager.configure(mode or _order_manager.mode, broker)
     return _order_manager

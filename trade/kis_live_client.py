@@ -12,15 +12,15 @@ class KisLiveClient(KisBaseClient):
     IS_MOCK           = False
     LIVE_TRADING_ENABLED = False  # config에서 명시적으로 활성화해야 함
 
-    def place_buy_order(self, symbol, quantity, price, order_type="00"):
+    def place_buy_order(self, symbol, quantity, price, order_type="00", use_sor: bool = False):
         if not self.LIVE_TRADING_ENABLED:
             raise LiveTradingDisabled("실계좌 거래 비활성화 상태")
-        return super().place_buy_order(symbol, quantity, price, order_type)
+        return super().place_buy_order(symbol, quantity, price, order_type, use_sor=use_sor)
 
-    def place_sell_order(self, symbol, quantity, price, order_type="00"):
+    def place_sell_order(self, symbol, quantity, price, order_type="00", use_sor: bool = False):
         if not self.LIVE_TRADING_ENABLED:
             raise LiveTradingDisabled("실계좌 거래 비활성화 상태")
-        return super().place_sell_order(symbol, quantity, price, order_type)
+        return super().place_sell_order(symbol, quantity, price, order_type, use_sor=use_sor)
 
 _kis_live_client: Optional[KisLiveClient] = None
 

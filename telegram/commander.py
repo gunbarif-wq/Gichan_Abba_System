@@ -159,9 +159,16 @@ class Commander:
     def _execute_buy(self, symbol: str, name: str,
                      price: int, quantity: int) -> str:
         try:
+            from account.account_manager import get_account_manager
+            from control.manual_trade_handler import get_manual_trade_handler
+            mgr = get_account_manager()
+            result = get_manual_trade_handler(mgr.mode).handle_buy(
+                symbol=symbol, qty=quantity, price=price, name=name,
+            )
+            return result.message
             from trade.kis_live_client import get_kis_live_client
             kis = get_kis_live_client()
-            kis.place_buy_order(symbol, quantity, price, order_type="01")
+            raise RuntimeError("unreachable direct KIS order path")
             amount = price * quantity
             return (
                 f"매수 체결\n"
@@ -176,9 +183,16 @@ class Commander:
     def _execute_sell(self, symbol: str, name: str,
                       price: int, quantity: int, avg_price: int) -> str:
         try:
+            from account.account_manager import get_account_manager
+            from control.manual_trade_handler import get_manual_trade_handler
+            mgr = get_account_manager()
+            result = get_manual_trade_handler(mgr.mode).handle_sell(
+                symbol=symbol, qty=quantity, price=price, name=name,
+            )
+            return result.message
             from trade.kis_live_client import get_kis_live_client
             kis    = get_kis_live_client()
-            kis.place_sell_order(symbol, quantity, price, order_type="01")
+            raise RuntimeError("unreachable direct KIS order path")
             amount = price * quantity
             profit = (price - avg_price) * quantity
             pct    = (price - avg_price) / avg_price * 100 if avg_price > 0 else 0.0
@@ -335,6 +349,22 @@ class Commander:
             from trade.kis_live_client import get_kis_live_client
             mgr       = get_account_manager()
             positions = mgr.get_all_positions()
+            from control.manual_trade_handler import get_manual_trade_handler
+            if not positions:
+                return "보유 종목 없음"
+            handler = get_manual_trade_handler(mgr.mode)
+            results = []
+            self.send(f"전량매도 시작: {len(positions)}개 종목")
+            for symbol, pos in positions.items():
+                if pos.quantity <= 0:
+                    continue
+                price = int(pos.current_price or pos.avg_buy_price)
+                result = handler.handle_sell(
+                    symbol=symbol, qty=pos.quantity, price=price, name=pos.name,
+                )
+                results.append(result.message)
+            self.send("\n".join(results))
+            return "전량매도 요청을 주문 경로로 전달했습니다."
         except Exception as e:
             return f"전량매도 실패: {e}"
 
@@ -351,7 +381,7 @@ class Commander:
             try:
                 data  = kis.get_current_price(symbol)
                 price = int(data.get("stck_prpr", 0)) or int(pos.avg_buy_price)
-                kis.place_sell_order(symbol, pos.quantity, price, order_type="01")
+                raise RuntimeError("unreachable direct KIS order path")
                 amount = price * pos.quantity
                 profit = (price - pos.avg_buy_price) * pos.quantity
                 pct    = (price - pos.avg_buy_price) / pos.avg_buy_price * 100

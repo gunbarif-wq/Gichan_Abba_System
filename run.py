@@ -355,6 +355,15 @@ class SellMonitorThread(threading.Thread):
                 price=current_price,
                 quantity=quantity,
             )
+            if executed.filled_quantity <= 0:
+                logger.warning(
+                    f"[SellMonitor] 매도 제출됨/미체결: {symbol} state={executed.state.value}"
+                )
+                self.telegram.send_system(
+                    f"매도 주문 제출됨\n종목: {symbol}\n상태: {executed.state.value}\n"
+                    "체결 확인 후 계좌에 반영됩니다."
+                )
+                return
 
             tax = self.pnl_calc.calculate_tax(executed.amount)
             self.account_mgr.add_for_sell(
@@ -513,8 +522,18 @@ class BuyExecutorThread(threading.Thread):
             self.risk_mgr.check_order(order_obj, self.mode)
             executed = self.order_mgr.create_order(
                 signal=buy_signal, price=price, quantity=quantity,
+                order_type=order_type,
                 use_sor=use_sor,
             )
+            if executed.filled_quantity <= 0:
+                logger.warning(
+                    f"[BuyExecutor] 매수 제출됨/미체결: {symbol} state={executed.state.value}"
+                )
+                self.telegram.send_system(
+                    f"매수 주문 제출됨\n종목: {symbol}\n상태: {executed.state.value}\n"
+                    "체결 확인 후 계좌에 반영됩니다."
+                )
+                return
             self.account_mgr.deduct_for_buy(
                 symbol=symbol, quantity=executed.filled_quantity,
                 price=executed.avg_filled_price,
@@ -910,12 +929,15 @@ class GichanAbbaSystem:
         initial_cash    = config.get('initial_cash', DEFAULT_INITIAL_CASH)
         commission_rate = config.get('commission_rate', 0.00015)
         tax_rate        = config.get('tax_rate', 0.0018)
+        if mode == Mode.LIVE:
+            from trade.kis_live_client import KisLiveClient
+            KisLiveClient.LIVE_TRADING_ENABLED = bool(config.get('live_trading', False))
 
         # 싱글톤 초기화
         account_mgr  = init_account_manager(mode, initial_cash)
         market_clock = init_market_clock(mode, time_check_enabled=False)
         risk_mgr     = init_risk_manager()
-        order_mgr    = get_order_manager()
+        order_mgr    = get_order_manager(mode=mode)
         position_mgr = get_position_manager()
         pnl_calc     = get_pnl_calculator(commission_rate, tax_rate)
 

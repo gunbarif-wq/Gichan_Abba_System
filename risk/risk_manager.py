@@ -110,9 +110,15 @@ class RiskManager:
 
             # 2. 실계좌 거래 여부 확인
             checks['live_trading'] = self._check_live_trading(mode)
+            if not checks['live_trading']:
+                self._record_rejection(order, checks)
+                raise LiveTradingDisabled("LIVE trading is disabled")
 
             # 3. 긴급 중단 확인 (legacy rules 기반 — SharedState 없는 환경 대비)
             checks['emergency_stop'] = self._check_emergency_stop()
+            if not checks['emergency_stop']:
+                self._record_rejection(order, checks)
+                raise EmergencyStop("Emergency Stop ACTIVE")
             
             # 3. UNKNOWN 상태 확인
             checks['unknown_state'] = self._check_unknown_order_state(order.symbol)

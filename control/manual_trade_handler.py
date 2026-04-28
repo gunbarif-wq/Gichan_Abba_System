@@ -197,6 +197,19 @@ class ManualTradeHandler:
         from trade.order_manager import get_order_manager
 
         try:
+            if price <= 0:
+                try:
+                    from hub.data_hub import get_data_hub
+                    price = float(get_data_hub().get_current_price(symbol) or 0)
+                except Exception:
+                    price = 0
+                if price <= 0:
+                    return CommandResult(
+                        request_id=str(uuid4()),
+                        success=False,
+                        message=f"매수 실패: {symbol} 현재가 확인 불가",
+                    )
+
             signal = Signal(
                 symbol=symbol,
                 name=name or symbol,
@@ -206,12 +219,13 @@ class ManualTradeHandler:
                 reason="manual_buy",
             )
 
+            order_type = OrderType.MARKET if price <= 0 else OrderType.LIMIT
             order = Order(
                 order_id=str(uuid4()),
                 symbol=symbol,
                 name=name or symbol,
                 side=OrderSide.BUY,
-                order_type=OrderType.LIMIT,
+                order_type=order_type,
                 quantity=qty,
                 price=price,
                 amount=qty * price,
@@ -220,10 +234,16 @@ class ManualTradeHandler:
 
             get_risk_manager().check_order(order, self.mode)
             executed = get_order_manager().create_order(
-                signal, price, qty, use_sor=use_sor
+                signal, price, qty, order_type=order_type, use_sor=use_sor
             )
 
             route = "SOR(NXT)" if use_sor else "KRX"
+            if executed.filled_quantity <= 0:
+                return CommandResult(
+                    request_id=executed.order_id,
+                    success=True,
+                    message=f"매수 주문 제출 [{route}]: {symbol} 상태={executed.state.value}",
+                )
             return CommandResult(
                 request_id=executed.order_id,
                 success=True,
@@ -251,6 +271,20 @@ class ManualTradeHandler:
         from trade.order_manager import get_order_manager
 
         try:
+            if price <= 0:
+                try:
+                    from account.account_manager import get_account_manager
+                    pos = get_account_manager().get_position(symbol)
+                    price = float((pos.current_price or pos.avg_buy_price) if pos else 0)
+                except Exception:
+                    price = 0
+                if price <= 0:
+                    return CommandResult(
+                        request_id=str(uuid4()),
+                        success=False,
+                        message=f"매도 실패: {symbol} 현재가 확인 불가",
+                    )
+
             signal = Signal(
                 symbol=symbol,
                 name=name or symbol,
@@ -260,12 +294,13 @@ class ManualTradeHandler:
                 reason="manual_sell",
             )
 
+            order_type = OrderType.MARKET if price <= 0 else OrderType.LIMIT
             order = Order(
                 order_id=str(uuid4()),
                 symbol=symbol,
                 name=name or symbol,
                 side=OrderSide.SELL,
-                order_type=OrderType.LIMIT,
+                order_type=order_type,
                 quantity=qty,
                 price=price,
                 amount=qty * price,
@@ -274,10 +309,16 @@ class ManualTradeHandler:
 
             get_risk_manager().check_order(order, self.mode)
             executed = get_order_manager().create_order(
-                signal, price, qty, use_sor=use_sor
+                signal, price, qty, order_type=order_type, use_sor=use_sor
             )
 
             route = "SOR(NXT)" if use_sor else "KRX"
+            if executed.filled_quantity <= 0:
+                return CommandResult(
+                    request_id=executed.order_id,
+                    success=True,
+                    message=f"매도 주문 제출 [{route}]: {symbol} 상태={executed.state.value}",
+                )
             return CommandResult(
                 request_id=executed.order_id,
                 success=True,
@@ -302,6 +343,6 @@ _manual_trade_handler: Optional[ManualTradeHandler] = None
 
 def get_manual_trade_handler(mode: Mode = Mode.PAPER) -> ManualTradeHandler:
     global _manual_trade_handler
-    if _manual_trade_handler is None:
+    if _manual_trade_handler is None or _manual_trade_handler.mode != mode:
         _manual_trade_handler = ManualTradeHandler(mode)
     return _manual_trade_handler

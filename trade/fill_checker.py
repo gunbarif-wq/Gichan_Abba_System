@@ -85,11 +85,12 @@ class FillChecker:
                     )
             else:
                 # API 조회됐지만 매칭 없음 → Paper 폴백
-                return self._mark_filled(order)
+                logger.info(f"[FillChecker] 체결 내역 없음: {order.symbol} {order.order_id}")
 
         except Exception as e:
             logger.warning(f"[FillChecker] API 조회 실패, 즉시 체결 처리: {e}")
-            return self._mark_filled(order)
+            order.state = OrderState.UNKNOWN
+            order.metadata["fill_check_error"] = str(e)
 
         return order
 

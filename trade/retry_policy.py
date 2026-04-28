@@ -79,6 +79,11 @@ class RetryPolicy:
         from shared.errors import (
             InsufficientCash, RiskException, TokenExpired, NetworkError,
         )
+        try:
+            import requests
+            request_errors = (requests.RequestException,)
+        except Exception:
+            request_errors = (ConnectionError, TimeoutError)
 
         # no_retry 기본 포함
         _no_retry = no_retry_exceptions + (InsufficientCash, RiskException)
@@ -111,6 +116,17 @@ class RetryPolicy:
             except NetworkError as e:
                 logger.warning(
                     f"[RetryPolicy] 네트워크 오류 "
+                    f"(시도 {attempt}/{self.MAX_NETWORK_RETRIES}): {e}"
+                )
+                last_error = str(e)
+                if attempt <= self.MAX_NETWORK_RETRIES:
+                    time.sleep(self.RETRY_DELAY)
+                else:
+                    break
+
+            except request_errors as e:
+                logger.warning(
+                    f"[RetryPolicy] 요청 오류 "
                     f"(시도 {attempt}/{self.MAX_NETWORK_RETRIES}): {e}"
                 )
                 last_error = str(e)

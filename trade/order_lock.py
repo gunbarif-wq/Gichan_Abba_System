@@ -37,6 +37,12 @@ class OrderLock:
         종목 잠금 획득
         Returns: True if acquired, False if already locked
         """
+        with self._meta_lock:
+            if symbol in self._locked:
+                existing = self._locked.get(symbol, "unknown")
+                logger.warning(f"[OrderLock] 잠금 실패: {symbol} (기존 order={existing})")
+                return False
+
         lock = self._get_lock(symbol)
         acquired = lock.acquire(blocking=False)
         if acquired:
