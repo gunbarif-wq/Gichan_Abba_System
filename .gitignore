@@ -32,6 +32,9 @@ config/mock_config.yaml
 storage/logs/
 *.log
 
+# Token/cache files
+storage/cache/
+
 # Claude Code 개인 설정
 .claude/
 

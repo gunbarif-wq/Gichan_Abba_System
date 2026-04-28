@@ -21,10 +21,11 @@ class WatchCandidate:
     name:         str
     score:        float = 0.0          # 종합 점수 (높을수록 우선)
     reasons:      List[str] = field(default_factory=list)
+    exchange:     str  = "KRX"         # 상장 거래소: KRX(코스피/코스닥) | NXT(넥스트레이드)
 
-    # 08:00~08:02 실시간 버퍼 (웹소켓 수신 후 채워짐)
-    open_volume:     int   = 0         # 08:00~08:02 누적 거래량
-    open_change_pct: float = 0.0       # 08:02 기준 등락률
+    # 08:00~08:00:10 실시간 버퍼 (웹소켓 수신 후 채워짐)
+    open_volume:     int   = 0         # 08:00~08:00:10 누적 거래량
+    open_change_pct: float = 0.0       # 08:00:10 기준 등락률
     buy_ratio:       float = 0.0       # 매수체결 / (매수+매도) 체결 비율
     last_price:      int   = 0
 
@@ -37,12 +38,11 @@ class WatchCandidate:
         self.buy_ratio = bid_qty / total_qty if total_qty > 0 else 0.5
 
     def is_buy_ready(self) -> bool:
-        """08:02 매수 진입 조건"""
-        return (
-            self.open_change_pct >= 1.0   # +1% 이상 상승
-            and self.buy_ratio   >= 0.55  # 매수 우위
-            and self.open_volume >= 5000  # 최소 거래량
-        )
+        """
+        장전 단일가 매수 진입 조건.
+        웹소켓 틱 없이 스캔 점수만으로 판단 (단일가는 실시간 틱 없음).
+        """
+        return self.score >= 5.0  # 거래량 상위 진입 점수 이상
 
 
 class PreMarketScanner:
@@ -51,8 +51,8 @@ class PreMarketScanner:
 
     단계:
       1) 07:00~08:00  뉴스/테마/거래량 스캔 → 후보 목록
-      2) 08:00~08:02  웹소켓 실시간 데이터 버퍼링
-      3) 08:02        매수 준비 완료 신호
+      2) 08:00~08:00:10  웹소켓 실시간 데이터 버퍼링 (10초)
+      3) 08:00:10        최종 선정 → 장전 시간외 매수
     """
 
     def __init__(self, kis_client):
@@ -94,6 +94,7 @@ class PreMarketScanner:
 
     def _scan_volume(self, candidates: Dict[str, WatchCandidate]):
         """거래량 상위 종목 스캔"""
+        from exchange.validator import is_nxt_eligible
         for market in ("J", "Q"):
             try:
                 items = self.kis.get_volume_rank(market=market, top_n=20)
@@ -103,10 +104,11 @@ class PreMarketScanner:
                     if not symbol:
                         continue
 
+                    exchange = "NXT" if is_nxt_eligible(symbol) else "KRX"
                     c = candidates.setdefault(
-                        symbol, WatchCandidate(symbol=symbol, name=name)
+                        symbol, WatchCandidate(symbol=symbol, name=name,
+                                              exchange=exchange)
                     )
-                    # 순위가 높을수록 높은 점수 (1위=20점, 20위=1점)
                     score = max(0, 20 - rank)
                     c.score += score
                     c.reasons.append(f"거래량{rank+1}위")
@@ -149,7 +151,30 @@ class PreMarketScanner:
         except Exception as e:
             logger.warning(f"[PreMarket] 테마 스캔 실패: {e}")
 
-    # ── 2단계: 실시간 틱 버퍼링 (08:00~08:02) ─────────────────────────────────
+    # ── 시뮬레이션: 현재가로 틱 데이터 채우기 ────────────────────────────────────
+
+    def fill_from_current_price(self):
+        """시뮬레이션/테스트용 — 현재가 API로 on_tick 대체"""
+        import time as _time
+        for symbol, c in list(self._watchlist.items()):
+            try:
+                data = self.kis.get_current_price(symbol)
+                price      = int(float(data.get("stck_prpr", 0) or 0))
+                change_pct = float(data.get("prdy_ctrt", 0) or 0)
+                volume     = int(float(data.get("acml_vol", 0) or 0))
+                # 호가잔량으로 buy_ratio 근사
+                ask_qty = int(float(data.get("askp_rsqn1", 1) or 1))
+                bid_qty = int(float(data.get("bidp_rsqn1", 1) or 1))
+                c.last_price      = price
+                c.open_change_pct = change_pct
+                c.open_volume     = volume
+                total = ask_qty + bid_qty
+                c.buy_ratio = bid_qty / total if total > 0 else 0.5
+                _time.sleep(0.05)
+            except Exception as e:
+                logger.debug(f"[PreMarket] {symbol} 현재가 조회 실패: {e}")
+
+    # ── 2단계: 실시간 틱 버퍼링 (08:00~08:00:10) ──────────────────────────────
 
     def on_tick(self, tick):
         """웹소켓 콜백 — 감시 종목의 틱 데이터 버퍼링"""
@@ -163,10 +188,10 @@ class PreMarketScanner:
                 bid_qty=tick.bid_qty,
             )
 
-    # ── 3단계: 08:02 매수 후보 반환 ───────────────────────────────────────────
+    # ── 3단계: 08:00:10 최종 선정 ─────────────────────────────────────────────
 
     def get_buy_candidates(self) -> List[WatchCandidate]:
-        """08:02 기준 매수 진입 조건을 충족한 종목 반환"""
+        """08:00:10 기준 매수 진입 조건을 충족한 종목 반환"""
         ready = [c for c in self._watchlist.values() if c.is_buy_ready()]
         ready.sort(key=lambda c: c.score, reverse=True)
         logger.info(f"[PreMarket] 매수 준비 완료: {len(ready)}개")

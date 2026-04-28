@@ -4,15 +4,19 @@ REST (토큰/주문/잔고) + 웹소켓 접속키 발급
 모의투자 / 실투자 공통 로직
 """
 
+import json
 import logging
 import threading
 import time
 from datetime import datetime, timedelta, date
+from pathlib import Path
 from typing import Optional
 
 import requests
 
 logger = logging.getLogger(__name__)
+
+_TOKEN_CACHE_DIR = Path(__file__).resolve().parent.parent / "storage" / "cache"
 
 
 class KisBaseClient:
@@ -42,11 +46,42 @@ class KisBaseClient:
         self._approval_key:    Optional[str]      = None  # 웹소켓 접속키
 
         self._token_lock = threading.Lock()  # 동시 갱신 방지
+        # 토큰 파일 캐시 경로 (app_key 앞 8자리로 구분)
+        _TOKEN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        self._token_cache_file = _TOKEN_CACHE_DIR / f"token_{app_key[:8]}.json"
 
         self._session = requests.Session()
         self._session.headers.update({"Content-Type": "application/json"})
+        self._load_token_cache()
 
     # ── 토큰 관리 ──────────────────────────────────────────────────────────────
+
+    def _load_token_cache(self):
+        """파일에서 토큰 캐시 복원 (프로세스 재시작 후에도 재사용)"""
+        try:
+            if self._token_cache_file.exists():
+                data = json.loads(self._token_cache_file.read_text(encoding="utf-8"))
+                self._access_token    = data.get("access_token")
+                expire_str            = data.get("expire_at")
+                if expire_str:
+                    self._token_expire_at = datetime.fromisoformat(expire_str)
+                if self._is_token_valid():
+                    logger.info("[KIS] 토큰 캐시 복원 완료")
+        except Exception:
+            pass
+
+    def _save_token_cache(self):
+        """토큰을 파일에 저장"""
+        try:
+            self._token_cache_file.write_text(
+                json.dumps({
+                    "access_token": self._access_token,
+                    "expire_at":    self._token_expire_at.isoformat() if self._token_expire_at else None,
+                }, ensure_ascii=False),
+                encoding="utf-8"
+            )
+        except Exception:
+            pass
 
     def get_access_token(self) -> str:
         """
@@ -78,6 +113,7 @@ class KisBaseClient:
             expires_in            = int(data.get("expires_in", 86400))
             self._token_expire_at = datetime.now() + timedelta(seconds=expires_in)
 
+            self._save_token_cache()
             logger.info(f"[KIS] 토큰 갱신 완료 (만료: {self._token_expire_at:%H:%M:%S})")
             return self._access_token
 
@@ -252,20 +288,26 @@ class KisBaseClient:
     # ── 주문 ───────────────────────────────────────────────────────────────────
 
     def place_buy_order(self, symbol: str, quantity: int,
-                        price: int, order_type: str = "00") -> dict:
+                        price: int, order_type: str = "00",
+                        use_sor: bool = False) -> dict:
         """
         매수 주문
         order_type: "00"=지정가, "01"=시장가
+        use_sor: True이면 NXT SOR 주문 (KOSPI200/KOSDAQ150 적격 종목만)
         """
-        tr_id = "VTTC0802U" if self.IS_MOCK else "TTTC0802U"
-        url   = f"{self.BASE_URL}/uapi/domestic-stock/v1/trading/order-cash"
-        body  = {
-            "CANO":          self.cano,
-            "ACNT_PRDT_CD":  self.acnt_prdt_cd,
-            "PDNO":          symbol,
-            "ORD_DVSN":      order_type,
-            "ORD_QTY":       str(quantity),
-            "ORD_UNPR":      str(price),
+        if use_sor and not self.IS_MOCK:
+            tr_id = "TTTC0852U"   # NXT SOR 매수
+        else:
+            tr_id = "VTTC0802U" if self.IS_MOCK else "TTTC0802U"
+
+        url  = f"{self.BASE_URL}/uapi/domestic-stock/v1/trading/order-cash"
+        body = {
+            "CANO":         self.cano,
+            "ACNT_PRDT_CD": self.acnt_prdt_cd,
+            "PDNO":         symbol,
+            "ORD_DVSN":     order_type,
+            "ORD_QTY":      str(quantity),
+            "ORD_UNPR":     str(price),
         }
 
         resp = self._session.post(url, headers=self._headers(tr_id),
@@ -274,25 +316,41 @@ class KisBaseClient:
         data = resp.json()
 
         if data.get("rt_cd") != "0":
+            msg_cd = data.get("msg_cd", "")
+            # NXT SOR 거래소 불일치 에러 → KRX 재시도
+            if use_sor and msg_cd in ("APBK0013", "APBK0930", "IGW00002"):
+                logger.warning(
+                    f"[KIS] NXT SOR 실패({msg_cd}), KRX 재시도: {symbol}"
+                )
+                return self.place_buy_order(symbol, quantity, price, order_type, use_sor=False)
             raise RuntimeError(
-                f"매수 주문 실패: {data.get('msg1', '')} [{data.get('msg_cd', '')}]"
+                f"매수 주문 실패: {data.get('msg1', '')} [{msg_cd}]"
             )
 
-        logger.info(f"[KIS] 매수 주문 완료: {symbol} {quantity}주 @ {price:,}원")
+        route = "SOR(NXT)" if use_sor else "KRX"
+        logger.info(f"[KIS] 매수 주문 완료 [{route}]: {symbol} {quantity}주 @ {price:,}원")
         return data.get("output", {})
 
     def place_sell_order(self, symbol: str, quantity: int,
-                         price: int, order_type: str = "00") -> dict:
-        """매도 주문"""
-        tr_id = "VTTC0801U" if self.IS_MOCK else "TTTC0801U"
-        url   = f"{self.BASE_URL}/uapi/domestic-stock/v1/trading/order-cash"
-        body  = {
-            "CANO":          self.cano,
-            "ACNT_PRDT_CD":  self.acnt_prdt_cd,
-            "PDNO":          symbol,
-            "ORD_DVSN":      order_type,
-            "ORD_QTY":       str(quantity),
-            "ORD_UNPR":      str(price),
+                         price: int, order_type: str = "00",
+                         use_sor: bool = False) -> dict:
+        """
+        매도 주문
+        use_sor: True이면 NXT SOR 주문
+        """
+        if use_sor and not self.IS_MOCK:
+            tr_id = "TTTC0851U"   # NXT SOR 매도
+        else:
+            tr_id = "VTTC0801U" if self.IS_MOCK else "TTTC0801U"
+
+        url  = f"{self.BASE_URL}/uapi/domestic-stock/v1/trading/order-cash"
+        body = {
+            "CANO":         self.cano,
+            "ACNT_PRDT_CD": self.acnt_prdt_cd,
+            "PDNO":         symbol,
+            "ORD_DVSN":     order_type,
+            "ORD_QTY":      str(quantity),
+            "ORD_UNPR":     str(price),
         }
 
         resp = self._session.post(url, headers=self._headers(tr_id),
@@ -301,11 +359,18 @@ class KisBaseClient:
         data = resp.json()
 
         if data.get("rt_cd") != "0":
+            msg_cd = data.get("msg_cd", "")
+            if use_sor and msg_cd in ("APBK0013", "APBK0930", "IGW00002"):
+                logger.warning(
+                    f"[KIS] NXT SOR 실패({msg_cd}), KRX 재시도: {symbol}"
+                )
+                return self.place_sell_order(symbol, quantity, price, order_type, use_sor=False)
             raise RuntimeError(
-                f"매도 주문 실패: {data.get('msg1', '')} [{data.get('msg_cd', '')}]"
+                f"매도 주문 실패: {data.get('msg1', '')} [{msg_cd}]"
             )
 
-        logger.info(f"[KIS] 매도 주문 완료: {symbol} {quantity}주 @ {price:,}원")
+        route = "SOR(NXT)" if use_sor else "KRX"
+        logger.info(f"[KIS] 매도 주문 완료 [{route}]: {symbol} {quantity}주 @ {price:,}원")
         return data.get("output", {})
 
     # ── 잔고/보유 조회 ─────────────────────────────────────────────────────────
@@ -363,7 +428,7 @@ class KisBaseClient:
         tr_id = "FHPST01710000"
         url   = f"{self.BASE_URL}/uapi/domestic-stock/v1/quotations/volume-rank"
         params = {
-            "FID_COND_MRK_DIV_CODE": market,
+            "FID_COND_MRKT_DIV_CODE": market,
             "FID_COND_SCR_DIV_CODE": "20171",
             "FID_INPUT_ISCD":        "0000",
             "FID_DIV_CLS_CODE":      "0",

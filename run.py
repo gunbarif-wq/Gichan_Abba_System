@@ -3,9 +3,9 @@
 Gichan Abba System - 멀티스레딩 메인 엔트리포인트
 
 스레드 우선순위:
-  Thread 0: PreMarketThread     - 07:00~08:02 장전 스캔 + 실시간 버퍼
+  Thread 0: PreMarketThread     - 07:00~08:00:10 장전 스캔 + 실시간 버퍼
   Thread 1: SellMonitorThread   - 1초 주기, 손절/익절/수동매도 (최우선)
-  Thread 2: BuyExecutorThread   - 후보 큐에서 매수 실행 (08:02~15:20)
+  Thread 2: BuyExecutorThread   - 후보 큐에서 매수 실행 (08:00:10~15:20)
   Thread 3: StrategyThread      - 종목 스캔/분석 (CPU 쓰로틀링 적용)
   Thread 4: MonitorReportThread - 30분마다 텔레그램 리포트 (08:00~20:00)
   Thread 5: CommandThread       - 수동 명령 수신
@@ -90,6 +90,9 @@ class SharedState:
         # Telegram /stop /resume 제어
         self.trading_paused: bool = False
 
+        # 오늘 장전 선정 결과 (수동 종목선정 비교용)
+        self.watchlist_candidates: dict = {}
+
     # ── running 플래그 ─────────────────────────────────────────────────────────
     def stop(self):
         with self._lock:
@@ -137,14 +140,18 @@ def get_shared_state() -> SharedState:
 # ── Thread 0: PreMarketThread ────────────────────────────────────────────────
 class PreMarketThread(threading.Thread):
     """
-    07:00~08:00  뉴스/테마/거래량 스캔 → 당일 감시 목록 확정
-    08:00~08:02  웹소켓 실시간 데이터 버퍼링
-    08:02        매수 후보를 BuyExecutorThread 큐에 적재
+    07:00        뉴스/테마/거래량 스캔 시작
+    07:00:10     NXT 적격 종목 선정 확정 (주문 대기)
+    07:30:10     KRX 종목 선정 확정 (주문 대기)
+    08:00        NXT 정규장 시작 → 선정된 NXT 종목 시장가 주문
+    09:00        KRX 정규장 시작 → 선정된 KRX 종목 시장가 주문
     """
 
-    PREMARKET_START = (7,  0)   # 07:00
-    BUFFER_START    = (8,  0)   # 08:00 웹소켓 수신 시작
-    BUY_START       = (8,  2)   # 08:02 매수 판단
+    SCAN_START   = (7,  0,  0)   # 07:00 스캔 시작
+    NXT_SELECT   = (7,  0, 10)   # 07:00:10 NXT 종목 선정
+    KRX_SELECT   = (7, 30, 10)   # 07:30:10 KRX 종목 선정
+    NXT_OPEN     = (8,  0,  0)   # 08:00 NXT 정규장 → 주문 실행
+    KRX_OPEN     = (9,  0,  0)   # 09:00 KRX 정규장 → 주문 실행
 
     def __init__(self, state: SharedState, scanner: PreMarketScanner,
                  ws: KisWebSocketClient, telegram):
@@ -157,90 +164,103 @@ class PreMarketThread(threading.Thread):
     def run(self):
         logger.info("[PreMarket] 장전 스레드 시작")
         while self.state.is_running():
-            now = datetime.now()
 
-            # 07:00 이전이면 대기
-            if (now.hour, now.minute) < self.PREMARKET_START:
-                self._sleep_until(*self.PREMARKET_START)
-                continue
+            # 07:00까지 대기
+            self._sleep_until(*self.SCAN_START)
 
-            # 07:00~08:00: 장전 스캔
+            # ── 07:00: 장전 스캔 ─────────────────────────────────────────────
             logger.info("[PreMarket] 07:00 장전 스캔 시작")
             self.telegram.send_system("장전 분석 시작 (뉴스/테마/거래량)")
 
             try:
                 candidates = self.scanner.run_premarket_scan()
                 symbols    = self.scanner.get_symbols()
-
-                self.telegram.send(
-                    f"📋 <b>당일 감시 목록 확정</b>\n"
-                    f"총 {len(symbols)}개 종목\n"
-                    + "\n".join(
-                        f"  {c.symbol} {c.name} ({', '.join(c.reasons[:2])})"
-                        for c in candidates[:10]
-                    )
-                )
-                logger.info(f"[PreMarket] 감시 목록 {len(symbols)}개 확정")
+                # 수동 종목선정 비교용으로 공유 상태에 저장
+                self.state.watchlist_candidates = {
+                    c.symbol: c for c in candidates
+                }
             except Exception as e:
                 logger.error(f"[PreMarket] 스캔 오류: {e}")
                 self.telegram.send_error(f"장전 스캔 실패: {e}")
+                self._sleep_until(7, 0, 0, next_day=True)
+                continue
 
-            # 08:00까지 대기
-            self._sleep_until(*self.BUFFER_START)
-
-            # 08:00: 웹소켓 구독 시작 + 스캐너에 틱 콜백 연결
-            logger.info("[PreMarket] 08:00 웹소켓 구독 시작")
+            # 웹소켓 구독 (포지션 실시간 업데이트용)
             original_on_tick = self.ws.on_tick
-
             def combined_tick(tick):
-                self.scanner.on_tick(tick)   # 버퍼링
+                self.scanner.on_tick(tick)
                 if original_on_tick:
-                    original_on_tick(tick)   # 포지션 현재가 업데이트
-
+                    original_on_tick(tick)
             self.ws.on_tick = combined_tick
-            self.ws.subscribe_list(self.scanner.get_symbols())
+            self.ws.subscribe_list(symbols)
 
-            # 08:02까지 2분 버퍼링 대기
-            self._sleep_until(*self.BUY_START)
-
-            # 08:02: 매수 조건 충족 종목 → 후보 큐 적재
-            buy_candidates = self.scanner.get_buy_candidates()
-            logger.info(f"[PreMarket] 08:02 매수 후보: {len(buy_candidates)}개")
-
-            for c in buy_candidates:
-                if not self.state.is_running():
-                    break
-                try:
-                    self.state.candidate_queue.put_nowait(
-                        (c.symbol, c.name, c.last_price, 0,
-                         f"장전분석 점수={c.score:.0f} 등락={c.open_change_pct:+.1f}%")
-                    )
-                    logger.info(
-                        f"[PreMarket] 매수 큐 적재: {c.symbol} {c.name} "
-                        f"등락={c.open_change_pct:+.1f}% 체결강도={c.buy_ratio:.0%}"
-                    )
-                except queue.Full:
-                    break
-
-            # 하루 1회 실행 — 다음날 07:00까지 대기
-            self.telegram.send_system(
-                f"장전 분석 완료\n매수 후보: {len(buy_candidates)}개"
+            # ── 07:00:10: NXT 종목 선정 ──────────────────────────────────────
+            self._sleep_until(*self.NXT_SELECT)
+            nxt_selected = [c for c in candidates
+                            if c.exchange == "NXT" and c.is_buy_ready()]
+            logger.info(f"[PreMarket] 07:00:10 NXT 선정: {len(nxt_selected)}개")
+            self.telegram.send(
+                f"<b>NXT 선정 완료 {len(nxt_selected)}개</b> (08:00 정규장 시장가 주문 예정)\n"
+                + "\n".join(f"  {c.symbol} {c.name} 점수={c.score:.0f}"
+                            for c in nxt_selected)
             )
-            self._sleep_until(7, 0, next_day=True)
+
+            # ── 07:30:10: KRX 종목 선정 ──────────────────────────────────────
+            self._sleep_until(*self.KRX_SELECT)
+            krx_selected = [c for c in candidates
+                            if c.exchange == "KRX" and c.is_buy_ready()]
+            logger.info(f"[PreMarket] 07:30:10 KRX 선정: {len(krx_selected)}개")
+            self.telegram.send(
+                f"<b>KRX 선정 완료 {len(krx_selected)}개</b> (09:00 정규장 시장가 주문 예정)\n"
+                + "\n".join(f"  {c.symbol} {c.name} 점수={c.score:.0f}"
+                            for c in krx_selected)
+            )
+
+            # ── 08:00: NXT 정규장 → 시장가 주문 ─────────────────────────────
+            self._sleep_until(*self.NXT_OPEN)
+            self._enqueue_candidates(nxt_selected, "NXT 정규장")
+            logger.info(f"[PreMarket] 08:00 NXT 시장가 주문: {len(nxt_selected)}개")
+
+            # ── 09:00: KRX 정규장 → 시장가 주문 ─────────────────────────────
+            self._sleep_until(*self.KRX_OPEN)
+            self._enqueue_candidates(krx_selected, "KRX 정규장")
+            logger.info(f"[PreMarket] 09:00 KRX 시장가 주문: {len(krx_selected)}개")
+
+            self.telegram.send_system(
+                f"정규장 주문 완료\n"
+                f"NXT {len(nxt_selected)}개 (08:00) / KRX {len(krx_selected)}개 (09:00)"
+            )
+
+            # 하루 1회 — 다음날 07:00까지 대기
+            self._sleep_until(7, 0, 0, next_day=True)
+
+    def _enqueue_candidates(self, candidates, label: str):
+        for c in candidates:
+            if not self.state.is_running():
+                break
+            try:
+                self.state.candidate_queue.put_nowait(
+                    (c.symbol, c.name, c.last_price, 0,
+                     f"{label} 점수={c.score:.0f}",
+                     c.exchange)
+                )
+            except queue.Full:
+                logger.warning("[PreMarket] 후보 큐 가득 참")
+                break
 
         logger.info("[PreMarket] 종료")
 
-    def _sleep_until(self, hour: int, minute: int, next_day: bool = False):
+    def _sleep_until(self, hour: int, minute: int, second: int = 0, next_day: bool = False):
         """특정 시각까지 1초씩 대기"""
         from datetime import timedelta
         now    = datetime.now()
-        target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        target = now.replace(hour=hour, minute=minute, second=second, microsecond=0)
         if next_day or target <= now:
             target += timedelta(days=1)
 
         wait = (target - datetime.now()).total_seconds()
         logger.info(
-            f"[PreMarket] {target:%H:%M}까지 대기 "
+            f"[PreMarket] {target:%H:%M:%S}까지 대기 "
             f"({wait/60:.0f}분 {wait%60:.0f}초)"
         )
         for _ in range(int(wait)):
@@ -414,10 +434,9 @@ class BuyExecutorThread(threading.Thread):
                 # ① 수동 매수 명령
                 self._process_manual_buys()
 
-                # ② 후보 큐에서 자동 매수 (08:02~15:20만, trading_paused 아닐 때)
+                # ② 후보 큐에서 자동 매수 (trading_paused 아닐 때 — 시간은 종목별 체크)
                 if (not self.state.is_emergency_stop()
-                        and not self.state.trading_paused
-                        and self.market_clock.can_buy()):
+                        and not self.state.trading_paused):
                     self._process_candidate_queue()
 
             except Exception as e:
@@ -445,16 +464,34 @@ class BuyExecutorThread(threading.Thread):
 
     def _process_candidate_queue(self):
         try:
-            symbol, name, price, quantity, reason = \
-                self.state.candidate_queue.get_nowait()
-            self._execute_buy(symbol, name, price, quantity, reason=reason)
+            item = self.state.candidate_queue.get_nowait()
+            # exchange 필드는 선택적 (6번째 원소)
+            symbol, name, price, quantity, reason = item[:5]
+            exchange = item[5] if len(item) > 5 else "KRX"
+
+            # 거래소별 매수 가능 시간 체크
+            if not self.market_clock.can_buy(exchange):
+                # 아직 해당 거래소 매수 시간 아님 → 큐에 다시 넣기
+                self.state.candidate_queue.put_nowait(item)
+                return
+
+            self._execute_buy(symbol, name, price, quantity,
+                              reason=reason, exchange=exchange)
+        except queue.Full:
+            pass
         except queue.Empty:
             pass
 
     def _execute_buy(self, symbol: str, name: str, price: float,
-                     quantity: int, reason: str):
+                     quantity: int, reason: str, exchange: str = "KRX"):
         from uuid import uuid4
         from shared.schemas import Order, OrderType
+        from exchange.validator import is_nxt_eligible
+
+        # 주문 타입: 장전 시간외=단일가(지정가), 정규장=시장가
+        order_kind   = self.market_clock.buy_order_type(exchange)
+        use_sor      = (exchange == "NXT" or is_nxt_eligible(symbol))
+        order_type   = OrderType.MARKET if order_kind == "market" else OrderType.LIMIT
 
         buy_signal = Signal(
             symbol=symbol, name=name,
@@ -466,7 +503,7 @@ class BuyExecutorThread(threading.Thread):
             order_id=str(uuid4()),
             symbol=symbol, name=name,
             side=OrderSide.BUY,
-            order_type=OrderType.LIMIT,
+            order_type=order_type,
             quantity=quantity, price=price,
             amount=quantity * price,
             reason=reason,
@@ -475,7 +512,8 @@ class BuyExecutorThread(threading.Thread):
         try:
             self.risk_mgr.check_order(order_obj, self.mode)
             executed = self.order_mgr.create_order(
-                signal=buy_signal, price=price, quantity=quantity
+                signal=buy_signal, price=price, quantity=quantity,
+                use_sor=use_sor,
             )
             self.account_mgr.deduct_for_buy(
                 symbol=symbol, quantity=executed.filled_quantity,
@@ -489,8 +527,9 @@ class BuyExecutorThread(threading.Thread):
                 commission=executed.commission,
             )
             buy_amount = int(executed.filled_quantity * executed.avg_filled_price)
+            route = "SOR(NXT)" if use_sor else exchange
             logger.info(
-                f"[BuyExecutor] 매수 완료: {symbol} {executed.filled_quantity}주 "
+                f"[BuyExecutor] 매수 완료 [{route}]: {symbol} {executed.filled_quantity}주 "
                 f"@ {executed.avg_filled_price:,}원 | {reason}"
             )
 
@@ -835,7 +874,7 @@ class CommandThread(threading.Thread):
 
 # ── Thread 6: TelegramBotThread ──────────────────────────────────────────────
 class _TelegramBotThread(threading.Thread):
-    """Telegram CommandAgent long polling (TELEGRAM_BOT_TOKEN 있을 때만 활성)"""
+    """Telegram CommandAgent + Commander 동시 폴링"""
 
     def __init__(self, state: SharedState):
         super().__init__(name="TelegramBot", daemon=True)
@@ -843,6 +882,17 @@ class _TelegramBotThread(threading.Thread):
 
     def run(self):
         logger.info("[TelegramBot] 봇 스레드 시작")
+        # Commander를 별도 스레드로 분리 실행
+        try:
+            from telegram.commander import get_commander
+            cmd_thread = threading.Thread(
+                target=get_commander().run,
+                name="TelegramCommander", daemon=True
+            )
+            cmd_thread.start()
+        except Exception as e:
+            logger.warning(f"[TelegramBot] Commander 시작 실패: {e}")
+
         try:
             agent = get_command_agent()
             agent.run()  # 내부 무한 루프 — 토큰 없으면 즉시 반환
@@ -926,14 +976,14 @@ class GichanAbbaSystem:
     def run(self):
         logger.info("=" * 60)
         logger.info("Gichan Abba System 시작 (멀티스레딩)")
-        logger.info(f"  매수: 08:02~15:20  감시: 08:00~20:00")
+        logger.info(f"  매수: 08:00:10~15:20  감시: 08:00~20:00")
         logger.info(f"  손절선: {STOP_LOSS_PCT}%  익절선: {TAKE_PROFIT_PCT}%")
         logger.info(f"  매도 감시 주기: {SELL_CHECK_SEC}초  스캔 주기: {SCAN_INTERVAL}초")
         logger.info("=" * 60)
 
         get_telegram_notifier().send_system(
             f"시스템 시작\n"
-            f"매수: 08:02~15:20 | 감시: 08:00~20:00\n"
+            f"매수: 08:00:10~15:20 | 감시: 08:00~20:00\n"
             f"손절: {STOP_LOSS_PCT}% | 익절: {TAKE_PROFIT_PCT}%"
         )
 

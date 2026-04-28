@@ -85,17 +85,27 @@ class ManualTradeHandler:
 
         effective_price = price or 0.0
 
-        # Live 모드: 2단계 확인
+        # Live 모드: 2단계 확인 (거래소 정보 포함)
         if self.mode == Mode.LIVE:
+            from exchange.validator import is_nxt_eligible
+            nxt_ok     = is_nxt_eligible(symbol)
+            exch_msg   = (
+                "NXT 거래 가능 종목입니다. 최적가(SOR)로 매수를 진행할까요?"
+                if nxt_ok else
+                "KRX 전용 종목입니다. 정규소 매수를 진행할까요?"
+            )
             confirm_id = str(uuid4())[:8]
             self._pending_confirmations[confirm_id] = {
-                "type": "BUY", "symbol": symbol, "qty": qty, "price": effective_price
+                "type": "BUY", "symbol": symbol, "qty": qty,
+                "price": effective_price, "use_sor": nxt_ok,
             }
             return CommandResult(
                 request_id=confirm_id,
                 success=True,
                 message=(
-                    f"[LIVE 확인 필요] 매수 {symbol} {qty}주 @ {effective_price:,.0f}원\n"
+                    f"{exch_msg}\n"
+                    f"종목: {name or symbol} ({symbol})\n"
+                    f"수량: {qty}주 @ {effective_price:,.0f}원\n"
                     f"확인 코드: {confirm_id}\n"
                     f"/confirm {confirm_id} 로 실행"
                 ),
@@ -150,17 +160,27 @@ class ManualTradeHandler:
 
         effective_price = price or 0.0
 
-        # Live 모드: 2단계 확인
+        # Live 모드: 2단계 확인 (거래소 정보 포함)
         if self.mode == Mode.LIVE:
+            from exchange.validator import is_nxt_eligible
+            nxt_ok   = is_nxt_eligible(symbol)
+            exch_msg = (
+                "NXT 거래 가능 종목입니다. 최적가(SOR)로 매도를 진행할까요?"
+                if nxt_ok else
+                "KRX 전용 종목입니다. 정규소 매도를 진행할까요?"
+            )
             confirm_id = str(uuid4())[:8]
             self._pending_confirmations[confirm_id] = {
-                "type": "SELL", "symbol": symbol, "qty": qty, "price": effective_price
+                "type": "SELL", "symbol": symbol, "qty": qty,
+                "price": effective_price, "use_sor": nxt_ok,
             }
             return CommandResult(
                 request_id=confirm_id,
                 success=True,
                 message=(
-                    f"[LIVE 확인 필요] 매도 {symbol} {qty}주 @ {effective_price:,.0f}원\n"
+                    f"{exch_msg}\n"
+                    f"종목: {name or symbol} ({symbol})\n"
+                    f"수량: {qty}주 @ {effective_price:,.0f}원\n"
                     f"확인 코드: {confirm_id}\n"
                     f"/confirm {confirm_id} 로 실행"
                 ),
@@ -168,7 +188,8 @@ class ManualTradeHandler:
 
         return self._execute_sell(symbol, name, qty, effective_price)
 
-    def _execute_buy(self, symbol: str, name: str, qty: int, price: float) -> CommandResult:
+    def _execute_buy(self, symbol: str, name: str, qty: int, price: float,
+                     use_sor: bool = False) -> CommandResult:
         """실제 매수 실행 (Risk Guard → Order Manager)"""
         from uuid import uuid4
         from shared.schemas import Order, OrderType, Mode as ModeEnum
@@ -198,12 +219,15 @@ class ManualTradeHandler:
             )
 
             get_risk_manager().check_order(order, self.mode)
-            executed = get_order_manager().create_order(signal, price, qty)
+            executed = get_order_manager().create_order(
+                signal, price, qty, use_sor=use_sor
+            )
 
+            route = "SOR(NXT)" if use_sor else "KRX"
             return CommandResult(
                 request_id=executed.order_id,
                 success=True,
-                message=f"매수 완료: {symbol} {executed.filled_quantity}주 @ {executed.avg_filled_price:,.0f}원",
+                message=f"매수 완료 [{route}]: {symbol} {executed.filled_quantity}주 @ {executed.avg_filled_price:,.0f}원",
             )
         except RiskException as e:
             return CommandResult(
@@ -218,7 +242,8 @@ class ManualTradeHandler:
                 message=f"매수 실패: {e}",
             )
 
-    def _execute_sell(self, symbol: str, name: str, qty: int, price: float) -> CommandResult:
+    def _execute_sell(self, symbol: str, name: str, qty: int, price: float,
+                      use_sor: bool = False) -> CommandResult:
         """실제 매도 실행 (Risk Guard → Order Manager)"""
         from uuid import uuid4
         from shared.schemas import Order, OrderType
@@ -248,12 +273,15 @@ class ManualTradeHandler:
             )
 
             get_risk_manager().check_order(order, self.mode)
-            executed = get_order_manager().create_order(signal, price, qty)
+            executed = get_order_manager().create_order(
+                signal, price, qty, use_sor=use_sor
+            )
 
+            route = "SOR(NXT)" if use_sor else "KRX"
             return CommandResult(
                 request_id=executed.order_id,
                 success=True,
-                message=f"매도 완료: {symbol} {executed.filled_quantity}주 @ {executed.avg_filled_price:,.0f}원",
+                message=f"매도 완료 [{route}]: {symbol} {executed.filled_quantity}주 @ {executed.avg_filled_price:,.0f}원",
             )
         except RiskException as e:
             return CommandResult(
